@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "ChatGPT Bridge By Niranjan !",
+  "version": "1.0.0",
+  "description": "Connects a terminal chat client to the open ChatGPT tab.",
+  "host_permissions": [
+    "http://127.0.0.1:1514/*",
+    "http://localhost:1514/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*"
+      ],
+      "all_frames": false,
+      "js": ["chat.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
