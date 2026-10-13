@@ -17,7 +17,7 @@
         "https://chat.openai.com/*"
       ],
       "all_frames": false,
-      "js": ["chat.js"],
+      "js": ["message-selectors.js", "chat.js"],
       "run_at": "document_idle"
     }
   ]

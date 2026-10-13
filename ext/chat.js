@@ -95,14 +95,83 @@ async function waitForSendButton(composer) {
     );
 }
 
-function messageElements() {
-    const roleMessages = [...document.querySelectorAll('[data-message-author-role="user"], [data-message-author-role="assistant"]')];
-    if (roleMessages.length) return roleMessages;
-    return [...document.querySelectorAll("[data-dil-source-message-id]")];
+const messageSelectors = globalThis.chatMessageSelectors;
+let messageStrategy = { path: location.pathname, selector: null };
+
+function syncMessageStrategy() {
+    if (messageStrategy.path !== location.pathname) {
+        messageStrategy = { path: location.pathname, selector: null };
+    }
+}
+
+function messageElements(selector = messageStrategy.selector) {
+    const elements = new Set();
+    for (const candidate of selector ? [selector] : messageSelectors) {
+        document.querySelectorAll(candidate).forEach((element) => elements.add(element));
+    }
+    return [...elements].sort((a, b) => {
+        if (a === b) return 0;
+        return a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1;
+    });
+}
+
+function findNewAssistantMessage(previous) {
+    const selectors = messageStrategy.selector
+        ? [messageStrategy.selector, ...messageSelectors.filter((selector) => selector !== messageStrategy.selector)]
+        : messageSelectors;
+
+    for (const selector of selectors) {
+        const candidate = [...document.querySelectorAll(selector)]
+            .filter((element) => !previous.has(element) && messageRole(element) === "assistant")
+            .at(-1);
+        if (candidate) {
+            messageStrategy.selector = selector;
+            return candidate;
+        }
+    }
+    return null;
+}
+
+function messageRole(element) {
+    if (element.matches('[data-markdown-text-style="assistant-message"]')) return "assistant";
+
+    const directRole = element.getAttribute("data-message-author-role");
+    if (directRole) return directRole;
+
+    const messageRole = element.getAttribute("data-message-role");
+    if (messageRole) return messageRole;
+
+    if (element.matches("[data-assistant-markdown-root], [data-assistant-markdown]")) return "assistant";
+
+    const unit = element.closest("[data-chatgpt-search-unit-key]");
+    const roleNode = element.matches("[data-conversation-role]")
+        ? element
+        : element.querySelector("[data-conversation-role]") || unit?.querySelector("[data-conversation-role]");
+    const semanticRole = roleNode?.getAttribute("data-conversation-role");
+    if (semanticRole) return semanticRole;
+    const unitKey = element.getAttribute("data-chatgpt-search-unit-key") || unit?.getAttribute("data-chatgpt-search-unit-key") || "";
+    if (unitKey.endsWith(":assistant")) return "assistant";
+    if (unitKey.endsWith(":user") || element.querySelector("[data-user-message-bubble]")) return "user";
+
+    const contentSearchUnit = element.closest("[data-content-search-unit-key]") ||
+        element.querySelector('[data-content-search-unit-key$=":user"], [data-content-search-unit-key$=":assistant"]');
+    const contentSearchUnitKey = contentSearchUnit?.getAttribute("data-content-search-unit-key") || "";
+    if (contentSearchUnitKey.endsWith(":assistant")) return "assistant";
+    if (contentSearchUnitKey.endsWith(":user")) return "user";
+
+    return null;
+}
+
+function messageText(element) {
+    const clone = element.cloneNode(true);
+    clone.querySelectorAll(
+        "[data-conversation-role], [data-message-attribution], [data-message-actions], [data-message-intervention]"
+    ).forEach((node) => node.remove());
+    return (clone.innerText || element.innerText || "").trim();
 }
 
 function getMessages() {
-    return messageElements().map((element) => element.innerText || "");
+    return messageElements().map(messageText);
 }
 
 function getLatestResponse() {
@@ -112,7 +181,7 @@ function getLatestResponse() {
 
 function assistantIsStreaming() {
     return [...document.querySelectorAll(
-        'button[aria-label*="Stop"], [data-testid*="stop-button"]'
+        'button[aria-label*="stop generating" i], button[aria-label="stop" i], [data-testid="stop-button"]'
     )].some((button) => {
         const style = getComputedStyle(button);
         return button.getClientRects().length > 0 &&
@@ -129,8 +198,7 @@ async function waitForAssistantResponse(previous, query) {
     let stableSince = 0;
 
     while (Date.now() < deadline) {
-        const msgs = messageElements();
-        const curt = msgs.filter((element) => !previous.has(element)).at(-1);
+        const curt = findNewAssistantMessage(previous);
 
         if (curt) {
             if (curt !== current) {
@@ -139,7 +207,7 @@ async function waitForAssistantResponse(previous, query) {
                 stableSince = 0;
             }
 
-            const resp = (curt.innerText || "").trim();
+            const resp = messageText(curt);
             if (resp === query.trim()) {
                 await sleep(200);
                 continue;
@@ -159,12 +227,21 @@ async function waitForAssistantResponse(previous, query) {
         }
         await sleep(200);
     }
+    const selectorCounts = messageSelectors
+        .map((selector) => `${selector}: ${document.querySelectorAll(selector).length}`)
+        .join("; ");
     throw new Error(
-        `Timed out waiting for a new message; matched ${messageElements().length} message element(s).`
+        `Timed out because no supported selector identified the new assistant message. ` +
+        `Selectors checked: ${selectorCounts}. ` +
+        `To add support, open the assistant message in the browser, choose Inspect, ` +
+        `copy the complete assistant message element (Copy > Copy outerHTML), and provide it ` +
+        `to an AI assistant together with message-selectors.js. Ask it to add the matching selector ` +
+        `to the array in message-selectors.js.`
     );
 }
 
 async function ask(item) {
+    syncMessageStrategy();
     const query = item.query;
     const composer = await waitForComposer();
 
