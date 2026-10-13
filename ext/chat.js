@@ -1,4 +1,4 @@
-const bridgeVersion = "8";
+const bridgeVersion = "9";
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 console.info(`[Local ChatGPT Bridge v${bridgeVersion}] loaded`);
 
@@ -41,17 +41,23 @@ async function userInput() {
 }
 
 function findComposer() {
-    return document.querySelector("textarea") || document.querySelector(
-        '[contenteditable="true"][role="textbox"], [contenteditable="true"][data-testid*="prompt"], [contenteditable="true"]'
-    );
+    const candidates = [...document.querySelectorAll(
+        'textarea, [contenteditable="true"][role="textbox"], [contenteditable="true"][data-testid*="prompt"], [contenteditable="true"]'
+    )];
+    return candidates.find((element) => {
+        const style = getComputedStyle(element);
+        return element.getClientRects().length > 0 && style.visibility !== "hidden" &&
+            style.display !== "none" && !element.disabled && element.getAttribute("aria-disabled") !== "true";
+    }) || null;
 }
 
-function findSendButton() {
-    return document.querySelector('button[aria-label="Send message"]') ||
-        document.querySelector('button[data-testid="send-button"]') ||
-        document.querySelector('button[aria-label="Send prompt"]') ||
-        document.querySelector('button[aria-label^="Send "]') ||
-        document.querySelector('form button[type="submit"]');
+function findSendButton(composer) {
+    const form = composer?.closest("form");
+    const scope = form || composer?.parentElement || document;
+    const candidates = [...scope.querySelectorAll(
+        'button[data-testid*="send" i], button[aria-label*="send" i], button[type="submit"]'
+    )];
+    return candidates.find((button) => !button.disabled && button.getAttribute("aria-disabled") !== "true") || null;
 }
 
 async function waitForComposer() {
@@ -72,18 +78,26 @@ async function waitForComposer() {
     );
 }
 
-async function waitForSendButton() {
-    for (let attempt = 0; attempt < 30; attempt++) {
-        const send = findSendButton();
+async function waitForSendButton(composer) {
+    for (let attempt = 0; attempt < 50; attempt++) {
+        const send = findSendButton(composer);
         if (send && !send.disabled && send.getAttribute("aria-disabled") !== "true") {
             return send;
         }
         await sleep(200);
     }
-    throw new Error("ChatGPT did not enable a send button after the prompt was entered.");
+    const buttons = [...(composer.closest("form") || composer.parentElement || document).querySelectorAll("button")]
+        .map((button) => `${button.getAttribute("aria-label") || button.title || ""}/${button.dataset.testid || ""}/disabled=${button.disabled || button.getAttribute("aria-disabled") === "true"}`)
+        .join(", ");
+    throw new Error(
+        `ChatGPT did not enable a send button after the prompt was entered ` +
+        `(composer=${composer.tagName.toLowerCase()}, text=${(composer.innerText || composer.value || "").trim().length} chars, buttons=${buttons || "none"}).`
+    );
 }
 
 function messageElements() {
+    const roleMessages = [...document.querySelectorAll('[data-message-author-role="user"], [data-message-author-role="assistant"]')];
+    if (roleMessages.length) return roleMessages;
     return [...document.querySelectorAll("[data-dil-source-message-id]")];
 }
 
@@ -139,9 +153,8 @@ async function waitForAssistantResponse(previous, query) {
                     stableSince = Date.now();
                 }
 
-                const complete = Boolean(curt.closest("[data-message-complete]"));
                 const stable = stableSince && Date.now() - stableSince >= 1200;
-                if (complete || (stable && !assistantIsStreaming())) return resp;
+                if (stable && !assistantIsStreaming()) return resp;
             }
         }
         await sleep(200);
@@ -181,7 +194,7 @@ async function ask(item) {
         inputType: "insertText",
         data: query,
     }));
-    const send = await waitForSendButton();
+    const send = await waitForSendButton(composer);
 
     const responsePromise = waitForAssistantResponse(previous, query);
     send.click();
